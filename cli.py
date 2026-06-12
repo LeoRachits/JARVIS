@@ -6,9 +6,11 @@ from __future__ import annotations
 
 from jarvis.brain import Brain
 from jarvis.config import load_settings
+from jarvis.logging_config import setup_logging
 
 
 def main() -> None:
+    setup_logging()
     settings = load_settings()
     brain = Brain(settings)
     print(f"{settings.jarvis_name} online. (digite 'sair' para encerrar)\n")

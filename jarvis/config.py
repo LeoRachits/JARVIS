@@ -32,6 +32,8 @@ class Settings:
     telegram_token: str
     telegram_allowed_user_id: int  # 0 = aceita qualquer um (NÃO recomendado)
     web_search_max_uses: int
+    request_timeout: float
+    max_retries: int
 
 
 def load_settings() -> Settings:
@@ -48,4 +50,6 @@ def load_settings() -> Settings:
         telegram_token=os.getenv("TELEGRAM_TOKEN", ""),
         telegram_allowed_user_id=int(os.getenv("TELEGRAM_ALLOWED_USER_ID", "0")),
         web_search_max_uses=int(os.getenv("WEB_SEARCH_MAX_USES", "5")),
+        request_timeout=float(os.getenv("JARVIS_REQUEST_TIMEOUT", "60")),
+        max_retries=int(os.getenv("JARVIS_MAX_RETRIES", "2")),
     )

@@ -11,6 +11,8 @@ Funciona de qualquer lugar enquanto o cérebro estiver ligado.
 """
 from __future__ import annotations
 
+import logging
+
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -22,6 +24,10 @@ from telegram.ext import (
 
 from jarvis.brain import Brain
 from jarvis.config import load_settings
+from jarvis.logging_config import setup_logging
+
+setup_logging()
+logger = logging.getLogger(__name__)
 
 settings = load_settings()
 brain = Brain(settings)
@@ -36,6 +42,7 @@ def _autorizado(update: Update) -> bool:
 
 async def start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     if not _autorizado(update):
+        logger.warning("Acesso negado a /start (user_id=%s).", _uid(update))
         return
     await update.message.reply_text(
         f"{settings.jarvis_name} online. Às ordens, {settings.user_name}."
@@ -44,6 +51,7 @@ async def start(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def reset(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     if not _autorizado(update):
+        logger.warning("Acesso negado a /reset (user_id=%s).", _uid(update))
         return
     brain.reset(session_id=_session(update))
     await update.message.reply_text("Memória limpa.")
@@ -51,16 +59,25 @@ async def reset(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def on_message(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     if not _autorizado(update):
+        logger.warning("Mensagem de usuário não autorizado (user_id=%s).", _uid(update))
         await update.message.reply_text("Sem permissão.")
         return
     await update.message.chat.send_action("typing")
-    reply = brain.chat(session_id=_session(update), user_message=update.message.text)
+    try:
+        reply = brain.chat(session_id=_session(update), user_message=update.message.text)
+    except Exception:  # noqa: BLE001 - o brain já trata, isto é só rede final
+        logger.exception("Falha ao processar mensagem do Telegram.")
+        reply = "Desculpe, algo deu errado aqui. Tente novamente."
     await update.message.reply_text(reply)
 
 
 def _session(update: Update) -> str:
     # Mesma memória do PC? Troque por um valor fixo como "default".
     return f"tg_{update.effective_user.id}"
+
+
+def _uid(update: Update) -> int | None:
+    return update.effective_user.id if update.effective_user else None
 
 
 def main() -> None:
@@ -70,6 +87,7 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
+    logger.info("%s no Telegram. Pressione Ctrl+C para parar.", settings.jarvis_name)
     print(f"{settings.jarvis_name} no Telegram. Pressione Ctrl+C para parar.")
     app.run_polling()
 
