@@ -57,6 +57,15 @@ async def reset(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("Memória limpa.")
 
 
+async def on_nao_texto(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _autorizado(update):
+        logger.warning("Mensagem não-texto de usuário não autorizado (user_id=%s).", _uid(update))
+        return
+    await update.message.reply_text(
+        "Por ora só entendo texto — em breve vou ler imagens."
+    )
+
+
 async def on_message(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     if not _autorizado(update):
         logger.warning("Mensagem de usuário não autorizado (user_id=%s).", _uid(update))
@@ -87,6 +96,7 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
+    app.add_handler(MessageHandler(~filters.TEXT & ~filters.COMMAND, on_nao_texto))
     logger.info("%s no Telegram. Pressione Ctrl+C para parar.", settings.jarvis_name)
     print(f"{settings.jarvis_name} no Telegram. Pressione Ctrl+C para parar.")
     app.run_polling()
