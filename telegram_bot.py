@@ -73,6 +73,7 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _autorizado(update):
         logger.warning("Foto de usuário não autorizado (user_id=%s).", _uid(update))
         return
+    logger.info("on_photo: recebido (%s)", "foto" if update.message.photo else "documento")
     await update.message.chat.send_action("typing")
     try:
         if update.message.photo:
@@ -96,6 +97,7 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         reply = brain.chat(
             session_id=_session(update), user_message=legenda, images=[bloco]
         )
+        logger.info("on_photo: resposta gerada (%d chars)", len(reply))
     except Exception:
         logger.exception("Falha ao processar imagem do Telegram (user_id=%s).", _uid(update))
         reply = "Não consegui analisar esta imagem. Tente novamente ou envie em outro formato."
