@@ -1,12 +1,12 @@
 """
 Smoke test do cérebro do Jarvis.
-Envia uma pergunta que força busca na web e imprime a resposta completa.
+Pergunta 1: valida web_search (notícias + fontes).
+Pergunta 2: valida web_fetch (abre URL e resume).
 """
 # ── Mythus Solutions ── Jarvis ── smoke_test.py ──────────────────────────────
 import sys
 import os
 
-# Garante que a raiz do projeto está no path (permite rodar de qualquer CWD)
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
@@ -14,27 +14,36 @@ if ROOT not in sys.path:
 from jarvis.config import load_settings
 from jarvis.brain import Brain
 
-PERGUNTA = (
-    "Quais são as principais notícias do Brasil hoje? "
-    "Pesquise na web e cite as fontes."
-)
+PERGUNTAS = [
+    (
+        "web_search",
+        "Quais são as principais notícias do Brasil hoje? "
+        "Pesquise na web e cite as fontes.",
+    ),
+    (
+        "web_fetch",
+        "Abra e resuma esta página: https://www.anthropic.com/news",
+    ),
+]
 SESSION = "smoke"
+
+settings = load_settings()
+brain = Brain(settings)
+
+# Limpa sessão anterior para evitar histórico contaminado.
+brain.reset(SESSION)
 
 print("=" * 60)
 print("JARVIS SMOKE TEST")
+print(f"Modelo: {settings.model}")
 print("=" * 60)
-print(f"Pergunta: {PERGUNTA}")
-print("-" * 60)
 
-settings = load_settings()
-print(f"Modelo   : {settings.model}")
-print(f"Max tokens: {settings.max_tokens}")
-print("-" * 60)
+for label, pergunta in PERGUNTAS:
+    print(f"\n[{label.upper()}] {pergunta}")
+    print("-" * 60)
+    resposta = brain.chat(SESSION, pergunta)
+    print(resposta)
+    print()
 
-brain = Brain(settings)
-resposta = brain.chat(SESSION, PERGUNTA)
-
-print("Resposta:")
-print(resposta)
 print("=" * 60)
 print("SMOKE TEST CONCLUÍDO")

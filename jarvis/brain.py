@@ -106,7 +106,14 @@ class Brain:
             "name": "web_search",
             "max_uses": self._settings.web_search_max_uses,
         }
-        return [web_search, *CLIENT_TOOLS]
+        web_fetch = {
+            "type": "web_fetch_20250910",
+            "name": "web_fetch",
+            "max_uses": 5,
+            "max_content_tokens": 60000,
+            "citations": {"enabled": True},
+        }
+        return [web_search, web_fetch, *CLIENT_TOOLS]
 
     def _tuya_control(self) -> TuyaControl | None:
         """Cria o controle Tuya sob demanda. Devolve None se não estiver configurado."""
@@ -177,6 +184,7 @@ class Brain:
                 system=self._system,
                 messages=messages,
                 tools=self._tools(),
+                extra_headers={"anthropic-beta": "web-fetch-2025-09-10"},
             )
 
             assistant_content = [
@@ -219,6 +227,7 @@ class Brain:
                 system=self._system,
                 messages=messages,
                 tools=self._tools(),
+                extra_headers={"anthropic-beta": "web-fetch-2025-09-10"},
             ) as stream:
                 for chunk in stream.text_stream:
                     if chunk:
