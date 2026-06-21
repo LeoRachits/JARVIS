@@ -11,7 +11,9 @@ Funciona de qualquer lugar enquanto o cérebro estiver ligado.
 """
 from __future__ import annotations
 
+import base64
 import logging
+import os
 
 from telegram import Update
 from telegram.ext import (
@@ -57,6 +59,49 @@ async def reset(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text("Memória limpa.")
 
 
+# Extensões suportadas ao receber imagem como arquivo (Document.IMAGE).
+_MIME_BY_EXT: dict[str, str] = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+}
+
+
+async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _autorizado(update):
+        logger.warning("Foto de usuário não autorizado (user_id=%s).", _uid(update))
+        return
+    await update.message.chat.send_action("typing")
+    try:
+        if update.message.photo:
+            # Telegram comprime fotos — maior resolução é o último elemento.
+            tg_file = await context.bot.get_file(update.message.photo[-1].file_id)
+            media_type = "image/jpeg"
+        else:
+            # Documento enviado como arquivo — preserva formato original.
+            doc = update.message.document
+            tg_file = await context.bot.get_file(doc.file_id)
+            ext = os.path.splitext(doc.file_name or "")[1].lower()
+            media_type = _MIME_BY_EXT.get(ext, "image/jpeg")
+
+        img_bytes = await tg_file.download_as_bytearray()
+        img_b64 = base64.b64encode(bytes(img_bytes)).decode()
+        bloco = {
+            "type": "image",
+            "source": {"type": "base64", "media_type": media_type, "data": img_b64},
+        }
+        legenda = update.message.caption or ""
+        reply = brain.chat(
+            session_id=_session(update), user_message=legenda, images=[bloco]
+        )
+    except Exception:
+        logger.exception("Falha ao processar imagem do Telegram (user_id=%s).", _uid(update))
+        reply = "Não consegui analisar esta imagem. Tente novamente ou envie em outro formato."
+    await update.message.reply_text(reply)
+
+
 async def on_nao_texto(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
     if not _autorizado(update):
         logger.warning("Mensagem não-texto de usuário não autorizado (user_id=%s).", _uid(update))
@@ -96,6 +141,7 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
+    app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, on_photo))
     app.add_handler(MessageHandler(~filters.TEXT & ~filters.COMMAND, on_nao_texto))
     logger.info("%s no Telegram. Pressione Ctrl+C para parar.", settings.jarvis_name)
     print(f"{settings.jarvis_name} no Telegram. Pressione Ctrl+C para parar.")

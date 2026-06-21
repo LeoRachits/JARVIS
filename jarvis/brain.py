@@ -95,7 +95,7 @@ class Brain:
         self._client = Anthropic(api_key=settings.anthropic_api_key)
         self._memory = Memory(settings.db_path)
         self._system = build_system_prompt(
-            settings.jarvis_name, settings.user_name
+            settings.jarvis_name, settings.user_name, settings.model
         )
         self._tuya: TuyaControl | None = None
         self._tuya_ready = False
@@ -144,10 +144,31 @@ class Brain:
                 return f"Tentei, mas algo falhou no controle da casa: {exc}"
         return f"Ferramenta '{name}' ainda não implementada."
 
-    def chat(self, session_id: str, user_message: str) -> str:
-        """Recebe uma mensagem do usuário e devolve a resposta do Jarvis."""
-        self._memory.append(session_id, "user", user_message)
+    def chat(
+        self,
+        session_id: str,
+        user_message: str,
+        images: list[dict[str, Any]] | None = None,
+    ) -> str:
+        """Recebe uma mensagem do usuário e devolve a resposta do Jarvis.
+
+        Se 'images' for fornecido, o turno atual envia texto + imagens à API.
+        Na memória persiste apenas um marcador de texto (sem base64), para que
+        turnos futuros não reenviem a imagem e não estoure o contexto.
+        """
+        # Marcador leve que vai para a memória (sem base64).
+        memo_text = ("[imagem recebida] " + user_message) if images else user_message
+        self._memory.append(session_id, "user", memo_text)
         messages = self._memory.history(session_id, limit=20)
+
+        # Substitui a última mensagem (o marcador) pelo conteúdo multimodal completo,
+        # SOMENTE para esta chamada. A memória já tem o marcador salvo.
+        if images:
+            text_part = {
+                "type": "text",
+                "text": user_message or "Descreva e interprete esta imagem em detalhes.",
+            }
+            messages[-1] = {"role": "user", "content": [*images, text_part]}
 
         for _ in range(6):  # trava de segurança contra loop infinito
             response = self._client.messages.create(
