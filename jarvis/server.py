@@ -25,7 +25,7 @@ settings = load_settings()
 brain = Brain(settings)
 app = FastAPI(title="Jarvis Brain", version="1.1.0")
 log = logging.getLogger("jarvis.server")
-_tts: TTS | None = None
+_tts = None
 
 
 def _get_tts():
@@ -69,13 +69,14 @@ def chat(
 
 
 def _sse_events(session_id: str, message: str) -> Iterator[str]:
-    """Gera os eventos SSE: um por delta de texto, e um 'done' no fim."""
+    """Converte os dicts do chat_stream em eventos SSE nomeados."""
+    # TODO: heartbeat keep-alive (": \n\n" periódico) — implementar em SPEC-03
     try:
-        for delta in brain.chat_stream(session_id, message):
-            yield f"data: {json.dumps({'delta': delta}, ensure_ascii=False)}\n\n"
-        yield f"data: {json.dumps({'done': True})}\n\n"
-    except Exception as exc:  # noqa: BLE001 — repassa o erro para o cliente fechar limpo
-        yield f"data: {json.dumps({'error': str(exc)}, ensure_ascii=False)}\n\n"
+        for ev in brain.chat_stream(session_id, message):
+            yield f"event: {ev['type']}\ndata: {json.dumps(ev, ensure_ascii=False)}\n\n"
+    except Exception as exc:
+        payload = json.dumps({"type": "error", "message": str(exc)}, ensure_ascii=False)
+        yield f"event: error\ndata: {payload}\n\n"
 
 
 @app.post("/chat/stream")

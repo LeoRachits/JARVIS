@@ -12,7 +12,7 @@ O loop de tool-use já chama suas funções automaticamente.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Iterator
 
 from anthropic import Anthropic
 
@@ -104,6 +104,75 @@ class Brain:
             messages.append({"role": "user", "content": tool_results})
 
         return "Desculpe, me perdi processando isso. Pode reformular?"
+
+    def chat_stream(self, session_id: str, user_message: str) -> Iterator[dict]:
+        """Versão streaming do chat(): faz yield de eventos em vez de return.
+
+        Formatos de evento:
+          {"type": "state",  "state": "thinking"}
+          {"type": "state",  "state": "tool", "name": "<ferramenta>"}
+          {"type": "delta",  "text": "<chunk>"}
+          {"type": "done",   "reply": "<texto completo>"}
+          {"type": "error",  "message": "<mensagem>"}
+        """
+        yield {"type": "state", "state": "thinking"}
+
+        model = self._settings.model
+        self._memory.append(session_id, "user", user_message)
+        messages = self._seed_messages(session_id)
+        tools = self._tools_for()
+        full_reply = ""
+
+        try:
+            for _ in range(self._settings.tool_loop_limit):
+                accumulated: list[str] = []
+
+                with self._client.messages.stream(
+                    model=model,
+                    max_tokens=self._settings.max_tokens,
+                    system=self._system,
+                    messages=messages,
+                    tools=tools,
+                ) as stream:
+                    for text in stream.text_stream:
+                        accumulated.append(text)
+                        yield {"type": "delta", "text": text}
+                    final = stream.get_final_message()
+
+                full_reply = "".join(accumulated)
+                assistant_content = [b.model_dump() for b in final.content]
+                self._memory.append(session_id, "assistant", assistant_content)
+                messages.append({"role": "assistant", "content": assistant_content})
+
+                if final.stop_reason != "tool_use":
+                    yield {"type": "done", "reply": full_reply}
+                    return
+
+                # Ferramentas client-side: emite state antes de executar cada uma.
+                tool_results: list[dict[str, Any]] = []
+                for block in final.content:
+                    if getattr(block, "type", None) != "tool_use":
+                        continue
+                    yield {"type": "state", "state": "tool", "name": block.name}
+                    content = self._execute_tool(block.name, block.input or {})
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": content,
+                    })
+
+                if not tool_results:
+                    yield {"type": "done", "reply": full_reply}
+                    return
+
+                self._memory.append(session_id, "user", tool_results)
+                messages.append({"role": "user", "content": tool_results})
+
+            yield {"type": "done", "reply": full_reply or "Desculpe, me perdi processando isso. Pode reformular?"}
+
+        except Exception:
+            logger.exception("Erro no chat_stream (session=%s)", session_id)
+            yield {"type": "error", "message": "Tive um problema para pensar agora. Pode repetir daqui a pouco?"}
 
     def reset(self, session_id: str) -> None:
         self._memory.clear(session_id)
