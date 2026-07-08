@@ -1,21 +1,38 @@
-"""API HTTP do Jarvis — é por aqui que o PC e o celular conversam com o cérebro."""
+"""API HTTP do Jarvis — é por aqui que o PC e o celular conversam com o cérebro.
+
+Endpoints:
+- GET  /health       — checagem de vida.
+- POST /chat         — resposta completa de uma vez (Telegram, reserva).
+- POST /chat/stream  — resposta em streaming (SSE) para a voz começar a falar antes.
+- POST /reset        — limpa a memória de uma sessão.
+"""
 from __future__ import annotations
 
+import json
 import logging
+from typing import Iterator
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Response
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+
+from .tts import build_tts
 
 from .brain import Brain
 from .config import load_settings
-from .logging_config import setup_logging
-
-setup_logging()
-logger = logging.getLogger(__name__)
 
 settings = load_settings()
 brain = Brain(settings)
-app = FastAPI(title="Jarvis Brain", version="1.0.0")
+app = FastAPI(title="Jarvis Brain", version="1.1.0")
+log = logging.getLogger("jarvis.server")
+_tts: TTS | None = None
+
+
+def _get_tts():
+    global _tts
+    if _tts is None:
+        _tts = build_tts(settings)
+    return _tts
 
 
 class ChatRequest(BaseModel):
@@ -33,7 +50,6 @@ def _check_auth(authorization: str | None) -> None:
         return  # token não configurado — liberado (ok só para testes locais)
     expected = f"Bearer {settings.api_token}"
     if authorization != expected:
-        logger.warning("Tentativa de acesso sem token válido.")
         raise HTTPException(status_code=401, detail="Não autorizado.")
 
 
@@ -50,6 +66,47 @@ def chat(
     _check_auth(authorization)
     reply = brain.chat(request.session_id, request.message)
     return ChatResponse(reply=reply)
+
+
+def _sse_events(session_id: str, message: str) -> Iterator[str]:
+    """Gera os eventos SSE: um por delta de texto, e um 'done' no fim."""
+    try:
+        for delta in brain.chat_stream(session_id, message):
+            yield f"data: {json.dumps({'delta': delta}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'done': True})}\n\n"
+    except Exception as exc:  # noqa: BLE001 — repassa o erro para o cliente fechar limpo
+        yield f"data: {json.dumps({'error': str(exc)}, ensure_ascii=False)}\n\n"
+
+
+@app.post("/chat/stream")
+def chat_stream(
+    request: ChatRequest,
+    authorization: str | None = Header(default=None),
+) -> StreamingResponse:
+    _check_auth(authorization)
+    return StreamingResponse(
+        _sse_events(request.session_id, request.message),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+class SpeakRequest(BaseModel):
+    text: str = Field(..., min_length=1)
+
+
+@app.post("/speak")
+def speak(
+    request: SpeakRequest,
+    authorization: str | None = Header(default=None),
+) -> Response:
+    _check_auth(authorization)
+    try:
+        audio = _get_tts().synthesize(request.text)
+    except Exception as exc:
+        log.error("Falha na síntese de voz: %s", exc)
+        raise HTTPException(status_code=500, detail="Falha ao gerar a fala.")
+    return Response(content=audio, media_type="audio/mpeg")
 
 
 @app.post("/reset")

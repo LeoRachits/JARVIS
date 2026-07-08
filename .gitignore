@@ -1,8 +1,38 @@
+# Segredos — NUNCA commitar
 .env
+*.env
+*.key
+oracle_key.key
+voice.env
+
+# Banco de memória
 *.db
+*.sqlite
+*.sqlite3
+
+# Saídas com dados de dispositivo
+tuya_saida.txt
+*_saida.txt
+
+# Scripts descartáveis da RAIZ (o barra inicial ancora na raiz;
+# jarvis/tuya_client.py e jarvis/providers.py NÃO são afetados)
+/apply_*.py
+/tuya_*.py
+/tuya_ir_*.py
+
+# Backups
+_backup_*/
+_raiz_duplicados_backup/
+
+# Logs e áudios temporários
+*.log
+uvicorn.log
+*.mp3
+voices/
+voice/
+
+# Python e IDE
 __pycache__/
 *.pyc
-*.pyo
-.venv/
-venv/
-.DS_Store
+.idea/
+.vscode/
