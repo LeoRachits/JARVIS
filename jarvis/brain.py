@@ -19,21 +19,84 @@ from anthropic import Anthropic
 from .config import Settings
 from .memory import Memory
 from .personality import build_system_prompt
+from .tuya_client import load_tuya_config, TuyaControl
 
 logger = logging.getLogger("jarvis.brain")
 
 # Ferramentas client-side que VOCÊ executa (abrir programa, casa inteligente, etc.).
 CLIENT_TOOLS: list[dict[str, Any]] = [
-    # Exemplo pronto para você ativar depois:
-    # {
-    #     "name": "abrir_programa",
-    #     "description": "Abre um programa no computador do usuário pelo nome.",
-    #     "input_schema": {
-    #         "type": "object",
-    #         "properties": {"nome": {"type": "string"}},
-    #         "required": ["nome"],
-    #     },
-    # },
+    {
+        "name": "controlar_ar",
+        "description": (
+            "Controla o ar-condicionado da casa via Tuya Smart IR. "
+            "Use quando o usuário pedir para ligar, desligar, ajustar temperatura, "
+            "modo ou velocidade do ventilador. "
+            "Exemplos: 'liga o ar do quarto', 'coloca em 22 graus', 'desliga o ar'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "acao": {
+                    "type": "string",
+                    "enum": ["ligar", "desligar", "temperatura", "modo", "ventilador"],
+                    "description": "Ação a executar no ar-condicionado.",
+                },
+                "comodo": {
+                    "type": "string",
+                    "description": (
+                        "Cômodo onde fica o ar (ex.: 'quarto', 'sala'). "
+                        "Obrigatório se houver mais de um aparelho configurado."
+                    ),
+                },
+                "valor": {
+                    "type": "number",
+                    "description": (
+                        "Temperatura em graus Celsius (16–30) para ação 'temperatura'; "
+                        "índice numérico para 'modo' (0=frio) e 'ventilador' "
+                        "(0=auto, 1=baixo, 2=médio, 3=alto)."
+                    ),
+                },
+            },
+            "required": ["acao"],
+        },
+    },
+    {
+        "name": "controlar_tv",
+        "description": (
+            "Controla a TV da casa via Tuya Smart IR. "
+            "Use quando o usuário pedir para ligar ou desligar a TV, mudar canal, "
+            "ajustar volume ou pressionar uma tecla do controle remoto. "
+            "Exemplos: 'liga a TV', 'aumenta o volume', 'vai pro canal 5', 'aperta mudo'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "acao": {
+                    "type": "string",
+                    "enum": [
+                        "power", "volume_subir", "volume_baixar",
+                        "canal_subir", "canal_baixar", "ir_para_canal", "tecla",
+                    ],
+                    "description": "Ação a executar na TV.",
+                },
+                "comodo": {
+                    "type": "string",
+                    "description": (
+                        "Cômodo onde fica a TV (ex.: 'quarto', 'sala'). "
+                        "Obrigatório se houver mais de uma TV configurada."
+                    ),
+                },
+                "valor": {
+                    "description": (
+                        "Número do canal (inteiro) para ação 'ir_para_canal'; "
+                        "nome da tecla para ação 'tecla' "
+                        "(ex.: 'mudo', 'ok', 'menu', 'mute', 'voltar')."
+                    ),
+                },
+            },
+            "required": ["acao"],
+        },
+    },
 ]
 
 
@@ -47,6 +110,16 @@ class Brain:
         )
         self._memory = Memory(settings.db_path)
         self._system = build_system_prompt(settings.jarvis_name, settings.user_name)
+        try:
+            _tuya_cfg = load_tuya_config()
+            self._tuya: TuyaControl | None = (
+                TuyaControl(_tuya_cfg) if _tuya_cfg.configured else None
+            )
+        except Exception:
+            logger.exception("Falha ao inicializar Tuya — controle de casa desabilitado")
+            self._tuya = None
+        if self._tuya is None:
+            logger.info("Controle de casa (Tuya) desabilitado.")
 
     # ------------------------------------------------------------------ #
     # API pública
@@ -205,9 +278,33 @@ class Brain:
         return results
 
     def _execute_tool(self, name: str, tool_input: dict[str, Any]) -> str:
-        """Executa uma ferramenta client-side. Adicione as suas aqui."""
-        # if name == "abrir_programa":
-        #     return abrir_programa(tool_input["nome"])
+        """Executa uma ferramenta client-side."""
+        if name == "controlar_ar":
+            if self._tuya is None:
+                return "O controle de casa não está configurado."
+            try:
+                return self._tuya.ar(
+                    acao=tool_input.get("acao", ""),
+                    valor=tool_input.get("valor"),
+                    comodo=tool_input.get("comodo"),
+                )
+            except Exception:
+                logger.exception("Erro ao executar controlar_ar")
+                return "Não consegui controlar o ar agora. Tente de novo."
+
+        if name == "controlar_tv":
+            if self._tuya is None:
+                return "O controle de casa não está configurado."
+            try:
+                return self._tuya.tv(
+                    acao=tool_input.get("acao", ""),
+                    valor=tool_input.get("valor"),
+                    comodo=tool_input.get("comodo"),
+                )
+            except Exception:
+                logger.exception("Erro ao executar controlar_tv")
+                return "Não consegui controlar a TV agora. Tente de novo."
+
         return f"Ferramenta '{name}' ainda não implementada."
 
     # ------------------------------------------------------------------ #
