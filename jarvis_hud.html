@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>J.A.R.V.I.S.</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@300;400;600&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#04080f;
+    --core:#46e6ff;        /* ciano elétrico */
+    --core-soft:#1d9ec6;
+    --ring:#155b78;
+    --amber:#ffb454;       /* alerta / acento quente, usado com parcimônia */
+    --text:#bfeaff;
+    --dim:#3f6175;
+    --glass:rgba(12,28,40,0.45);
+    --line:rgba(70,230,255,0.18);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);
+    font-family:"Chakra Petch",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  body{
+    background:
+      radial-gradient(1200px 800px at 50% 50%, rgba(20,60,82,0.35), transparent 70%),
+      radial-gradient(900px 900px at 50% 120%, rgba(8,30,46,0.6), transparent 60%),
+      var(--bg);
+  }
+  canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+
+  /* moldura HUD nos cantos */
+  .frame{position:fixed;inset:0;pointer-events:none}
+  .corner{position:absolute;width:46px;height:46px;border:1px solid var(--line)}
+  .corner.tl{top:22px;left:22px;border-right:0;border-bottom:0}
+  .corner.tr{top:22px;right:22px;border-left:0;border-bottom:0}
+  .corner.bl{bottom:22px;left:22px;border-right:0;border-top:0}
+  .corner.br{bottom:22px;right:22px;border-left:0;border-top:0}
+
+  .hud{position:fixed;inset:0;pointer-events:none;font-family:"Share Tech Mono",monospace}
+  .panel{
+    position:absolute;padding:12px 16px;border:1px solid var(--line);
+    background:var(--glass);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+    border-radius:2px;letter-spacing:.06em;
+  }
+  .tl-panel{top:40px;left:40px;min-width:240px}
+  .tr-panel{top:40px;right:40px;text-align:right;min-width:200px}
+  .label{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.22em}
+  .value{font-size:15px;color:var(--text);margin-top:2px}
+  .status-dot{display:inline-block;width:8px;height:8px;border-radius:50%;
+    background:var(--core);box-shadow:0 0 10px var(--core);margin-right:8px;vertical-align:middle;
+    animation:pulse 2.2s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:.55}50%{opacity:1}}
+
+  .brand{position:fixed;left:50%;top:34px;transform:translateX(-50%);text-align:center;pointer-events:none}
+  .brand h1{font-family:"Chakra Petch";font-weight:300;font-size:26px;letter-spacing:.7em;
+    color:var(--text);text-indent:.7em;text-shadow:0 0 24px rgba(70,230,255,.35)}
+  .brand .sub{font-family:"Share Tech Mono";font-size:10px;color:var(--dim);letter-spacing:.4em;margin-top:4px}
+
+  .transcript{position:fixed;left:50%;bottom:120px;transform:translateX(-50%);
+    width:min(680px,86vw);text-align:center;pointer-events:none}
+  .transcript .you{font-family:"Share Tech Mono";font-size:12px;color:var(--dim);
+    letter-spacing:.1em;min-height:16px}
+  .transcript .jarvis{font-family:"Chakra Petch";font-weight:400;font-size:19px;line-height:1.4;
+    color:var(--text);margin-top:8px;min-height:27px;text-shadow:0 0 18px rgba(70,230,255,.25)}
+
+  /* controles (modo demo) */
+  .controls{position:fixed;left:50%;bottom:34px;transform:translateX(-50%);
+    display:flex;gap:10px;pointer-events:auto;flex-wrap:wrap;justify-content:center}
+  .btn{font-family:"Share Tech Mono";font-size:11px;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--text);background:var(--glass);border:1px solid var(--line);
+    padding:9px 14px;border-radius:2px;cursor:pointer;backdrop-filter:blur(8px);
+    transition:border-color .2s, color .2s, box-shadow .2s}
+  .btn:hover,.btn:focus-visible{border-color:var(--core);color:#eafcff;
+    box-shadow:0 0 16px rgba(70,230,255,.25);outline:none}
+  .btn.active{border-color:var(--core);color:#eafcff;box-shadow:inset 0 0 18px rgba(70,230,255,.18)}
+  .btn.mic{color:var(--amber);border-color:rgba(255,180,84,.35)}
+  .btn.mic:hover{box-shadow:0 0 16px rgba(255,180,84,.25)}
+
+  .conn{position:fixed;right:40px;bottom:34px;font-family:"Share Tech Mono";font-size:10px;
+    color:var(--dim);letter-spacing:.12em;pointer-events:none}
+
+  @media (max-width:600px){
+    .tl-panel,.tr-panel{display:none}
+    .brand h1{font-size:18px;letter-spacing:.5em;text-indent:.5em}
+    .transcript{bottom:150px}
+  }
+  @media (prefers-reduced-motion:reduce){
+    .status-dot{animation:none}
+  }
+</style>
+</head>
+<body>
+<canvas id="reactor"></canvas>
+
+<div class="frame">
+  <span class="corner tl"></span><span class="corner tr"></span>
+  <span class="corner bl"></span><span class="corner br"></span>
+</div>
+
+<div class="brand">
+  <h1>JARVIS</h1>
+  <div class="sub">JUST A RATHER VERY INTELLIGENT SYSTEM</div>
+</div>
+
+<div class="hud">
+  <div class="panel tl-panel">
+    <div class="label">Estado</div>
+    <div class="value"><span class="status-dot" id="dot"></span><span id="stateText">Em espera</span></div>
+    <div class="label" style="margin-top:10px">Núcleo</div>
+    <div class="value" id="coreText">estável · 100%</div>
+  </div>
+  <div class="panel tr-panel">
+    <div class="label">Horário local</div>
+    <div class="value" id="clock">--:--:--</div>
+    <div class="label" style="margin-top:10px" id="dateLabel">--</div>
+  </div>
+
+  <div class="transcript">
+    <div class="you" id="you"></div>
+    <div class="jarvis" id="reply">Online. Às ordens, Senhor.</div>
+  </div>
+</div>
+
+<div class="controls">
+  <button class="btn active" data-state="idle">Espera</button>
+  <button class="btn" data-state="listening">Ouvindo</button>
+  <button class="btn" data-state="thinking">Processando</button>
+  <button class="btn" data-state="speaking">Falando</button>
+  <button class="btn mic" id="micBtn">Ativar microfone</button>
+</div>
+<div class="conn" id="conn">ponte: desconectada (modo demo)</div>
+
+<script>
+(() => {
+  "use strict";
+  const canvas = document.getElementById("reactor");
+  const ctx = canvas.getContext("2d");
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  const PALETTE = {
+    idle:      { core:"#2aa6c4", glow:0.35, ringSpin:0.05, wave:0.10 },
+    listening: { core:"#46e6ff", glow:0.6,  ringSpin:0.12, wave:0.55 },
+    thinking:  { core:"#7fd0ff", glow:0.7,  ringSpin:0.42, wave:0.30, scan:true },
+    speaking:  { core:"#5cf0ff", glow:0.95, ringSpin:0.18, wave:1.0 },
+  };
+  const STATE_PT = { idle:"Em espera", listening:"Ouvindo", thinking:"Processando", speaking:"Falando" };
+
+  let W, H, cx, cy, R, dpr;
+  function resize(){
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = canvas.width = Math.floor(innerWidth * dpr);
+    H = canvas.height = Math.floor(innerHeight * dpr);
+    canvas.style.width = innerWidth + "px";
+    canvas.style.height = innerHeight + "px";
+    cx = W/2; cy = H/2;
+    R = Math.min(W, H) * 0.20;
+  }
+  addEventListener("resize", resize); resize();
+
+  let state = "idle";
+  let level = 0, targetLevel = 0;   // amplitude suavizada
+  let t = 0;
+  let extLevel = 0, extLevelTime = 0;   // amplitude vinda da ponte (voz real do Jarvis)
+
+  // ---- Áudio (Web Audio API): reage ao som do microfone ----
+  let analyser = null, timeData = null, audioCtx = null, micStream = null;
+  async function toggleMic(){
+    if (micStream){
+      micStream.getTracks().forEach(tr => tr.stop());
+      micStream = null; analyser = null;
+      document.getElementById("micBtn").textContent = "Ativar microfone";
+      document.getElementById("micBtn").classList.remove("active");
+      return;
+    }
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio:true });
+      audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)();
+      const src = audioCtx.createMediaStreamSource(micStream);
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 1024;
+      timeData = new Uint8Array(analyser.fftSize);
+      src.connect(analyser);
+      const b = document.getElementById("micBtn");
+      b.textContent = "Microfone ligado"; b.classList.add("active");
+    } catch(e){
+      document.getElementById("conn").textContent = "microfone negado — usando demo";
+    }
+  }
+  document.getElementById("micBtn").addEventListener("click", toggleMic);
+
+  function readAudioLevel(){
+    // prioridade: amplitude real vinda da ponte (voz do Jarvis), se for recente
+    if (performance.now() - extLevelTime < 250){
+      targetLevel = extLevel;
+      return;
+    }
+    if (analyser){
+      analyser.getByteTimeDomainData(timeData);
+      let sum = 0;
+      for (let i=0;i<timeData.length;i++){ const v=(timeData[i]-128)/128; sum += v*v; }
+      const rms = Math.sqrt(sum/timeData.length);
+      targetLevel = Math.min(1, rms * 3.2);
+    } else {
+      // sem microfone: simula amplitude conforme o estado
+      if (state === "speaking")      targetLevel = 0.45 + 0.4*Math.abs(Math.sin(t*7)) * (0.6+0.4*Math.sin(t*2.3));
+      else if (state === "listening")targetLevel = 0.12 + 0.06*Math.sin(t*4);
+      else if (state === "thinking") targetLevel = 0.18 + 0.05*Math.sin(t*3);
+      else                           targetLevel = 0.05 + 0.03*Math.sin(t*1.4);
+    }
+  }
+
+  function waveSample(i, n){
+    // amostra para a forma de onda circular
+    if (analyser){
+      const idx = Math.floor(i/n * timeData.length);
+      return (timeData[idx]-128)/128;
+    }
+    return Math.sin(i*0.9 + t*6) * 0.6 + Math.sin(i*2.3 - t*4) * 0.4;
+  }
+
+  // ---- Desenho do reator ----
+  function drawRingTicks(radius, count, len, color, alpha, rot){
+    ctx.save(); ctx.translate(cx,cy); ctx.rotate(rot);
+    ctx.strokeStyle = color; ctx.globalAlpha = alpha; ctx.lineWidth = 1*dpr;
+    for (let i=0;i<count;i++){
+      const a = (i/count)*Math.PI*2;
+      const x1 = Math.cos(a)*radius, y1=Math.sin(a)*radius;
+      const x2 = Math.cos(a)*(radius+len), y2=Math.sin(a)*(radius+len);
+      ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+    }
+    ctx.restore();
+  }
+  function drawArc(radius, start, sweep, color, width, alpha){
+    ctx.save(); ctx.strokeStyle=color; ctx.globalAlpha=alpha; ctx.lineWidth=width*dpr;
+    ctx.lineCap="round";
+    ctx.beginPath(); ctx.arc(cx,cy,radius,start,start+sweep); ctx.stroke(); ctx.restore();
+  }
+
+  function draw(){
+    t += reduceMotion ? 0.004 : 0.016;
+    readAudioLevel();
+    level += (targetLevel - level) * 0.18;
+    const p = PALETTE[state];
+
+    ctx.clearRect(0,0,W,H);
+
+    // halo de fundo
+    const halo = ctx.createRadialGradient(cx,cy,R*0.2, cx,cy,R*3.2);
+    halo.addColorStop(0, `rgba(70,230,255,${0.10*p.glow + level*0.12})`);
+    halo.addColorStop(1, "rgba(70,230,255,0)");
+    ctx.fillStyle = halo; ctx.fillRect(0,0,W,H);
+
+    const spin = reduceMotion ? 0 : t*p.ringSpin;
+
+    // anéis externos com marcas
+    drawRingTicks(R*2.35, 90, 8*dpr, "#155b78", 0.5, spin*0.3);
+    drawRingTicks(R*2.05, 60, 14*dpr, "#1d9ec6", 0.35, -spin*0.5);
+    drawRingTicks(R*1.6, 120, 6*dpr, p.core, 0.25+level*0.3, spin*0.8);
+
+    // arcos giratórios (segmentos)
+    drawArc(R*1.85, spin*2.0, Math.PI*0.7, p.core, 2, 0.5+level*0.3);
+    drawArc(R*1.85, spin*2.0+Math.PI, Math.PI*0.4, p.core, 2, 0.4);
+    drawArc(R*1.35, -spin*1.5, Math.PI*0.9, "#46e6ff", 1.5, 0.35);
+    drawArc(R*1.35, -spin*1.5+Math.PI*1.2, Math.PI*0.3, "#46e6ff", 1.5, 0.25);
+
+    // varredura "pensando"
+    if (p.scan && !reduceMotion){
+      const a = (t*2.2)%(Math.PI*2);
+      const g = ctx.createConicGradient ? null : null;
+      ctx.save(); ctx.translate(cx,cy); ctx.rotate(a);
+      const grd = ctx.createLinearGradient(0,0,R*1.6,0);
+      grd.addColorStop(0,"rgba(127,208,255,0.0)");
+      grd.addColorStop(1,"rgba(127,208,255,0.5)");
+      ctx.strokeStyle=grd; ctx.lineWidth=2*dpr;
+      ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(R*1.6,0); ctx.stroke(); ctx.restore();
+    }
+
+    // forma de onda circular (reage à voz)
+    const N = 180;
+    const baseR = R*1.05;
+    const amp = R*0.42 * p.wave;
+    ctx.save();
+    ctx.strokeStyle = p.core; ctx.lineWidth = 2*dpr;
+    ctx.globalAlpha = 0.85;
+    ctx.shadowColor = p.core; ctx.shadowBlur = 14*dpr*p.glow;
+    ctx.beginPath();
+    for (let i=0;i<=N;i++){
+      const a = (i/N)*Math.PI*2;
+      const w = waveSample(i, N);
+      const r = baseR + w*amp*(0.4+level);
+      const x = cx + Math.cos(a)*r, y = cy + Math.sin(a)*r;
+      i===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y);
+    }
+    ctx.closePath(); ctx.stroke(); ctx.restore();
+
+    // núcleo do reator
+    const coreR = R*(0.5 + level*0.28);
+    const cg = ctx.createRadialGradient(cx,cy,0, cx,cy,coreR);
+    cg.addColorStop(0, "#eafcff");
+    cg.addColorStop(0.35, p.core);
+    cg.addColorStop(1, "rgba(70,230,255,0)");
+    ctx.save();
+    ctx.globalAlpha = 0.55 + 0.45*p.glow;
+    ctx.shadowColor = p.core; ctx.shadowBlur = 40*dpr*p.glow;
+    ctx.fillStyle = cg;
+    ctx.beginPath(); ctx.arc(cx,cy,coreR,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+
+    // anel fino do núcleo
+    drawArc(R*0.72, 0, Math.PI*2, "#bfeaff", 1, 0.5+level*0.3);
+
+    requestAnimationFrame(draw);
+  }
+  requestAnimationFrame(draw);
+
+  // ---- Estado ----
+  function setState(s){
+    if (!PALETTE[s]) return;
+    state = s;
+    document.getElementById("stateText").textContent = STATE_PT[s];
+    document.querySelectorAll(".btn[data-state]").forEach(b =>
+      b.classList.toggle("active", b.dataset.state === s));
+    const core = document.getElementById("coreText");
+    core.textContent = s==="thinking" ? "processando · 87%"
+                     : s==="speaking" ? "saída de voz · 100%"
+                     : s==="listening" ? "captando · 100%" : "estável · 100%";
+  }
+  document.querySelectorAll(".btn[data-state]").forEach(b =>
+    b.addEventListener("click", () => setState(b.dataset.state)));
+
+  // textos da conversa (preenchidos pela ponte ou pela demo)
+  function setTranscript(you, reply){
+    if (you !== undefined)   document.getElementById("you").textContent = you ? "VOCÊ: " + you : "";
+    if (reply !== undefined) document.getElementById("reply").textContent = reply || "";
+  }
+
+  // ---- Relógio ----
+  const dias = ["Domingo","Segunda","Terça","Quarta","Quinta","Sexta","Sábado"];
+  function tick(){
+    const d = new Date();
+    document.getElementById("clock").textContent = d.toLocaleTimeString("pt-BR");
+    document.getElementById("dateLabel").textContent =
+      dias[d.getDay()] + " · " + d.toLocaleDateString("pt-BR");
+  }
+  tick(); setInterval(tick, 1000);
+
+  // ---- Ponte WebSocket opcional (o cliente de voz controla o HUD) ----
+  // Mensagens esperadas (JSON): {state:"listening|thinking|speaking|idle", you:"...", reply:"..."}
+  function connectBridge(){
+    let ws;
+    try { ws = new WebSocket("ws://127.0.0.1:8765"); }
+    catch(e){ return; }
+    ws.onopen = () => { document.getElementById("conn").textContent = "ponte: conectada"; };
+    ws.onclose = () => {
+      document.getElementById("conn").textContent = "ponte: desconectada (modo demo)";
+      setTimeout(connectBridge, 4000); // tenta reconectar
+    };
+    ws.onmessage = (ev) => {
+      try {
+        const m = JSON.parse(ev.data);
+        if (m.state) setState(m.state);
+        if (m.you !== undefined || m.reply !== undefined) setTranscript(m.you, m.reply);
+        if (m.level !== undefined){ extLevel = m.level; extLevelTime = performance.now(); }
+      } catch(_){}
+    };
+  }
+  connectBridge();
+})();
+</script>
+</body>
+</html>

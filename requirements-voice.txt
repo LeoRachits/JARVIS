@@ -1,0 +1,27 @@
+# Dependências da CAMADA DE VOZ (cliente com microfone).
+# Mantidas separadas do cérebro: a máquina que só hospeda o cérebro NÃO precisa
+# instalar nada de áudio. Instale isto só onde o microfone/alto-falante existem.
+#
+#   pip install -r requirements-voice.txt
+
+# Captura e reprodução de áudio
+sounddevice>=0.4.6
+numpy>=1.24
+
+# Palavra de ativação (local) — usa onnxruntime
+openwakeword>=0.6.0
+onnxruntime>=1.17
+
+# Fim de fala (endpointing)
+webrtcvad>=2.0.10
+
+# Fala -> texto (local, PT-BR)
+faster-whisper>=1.0.0
+
+# HTTP para o cérebro e para a ElevenLabs
+requests>=2.31
+python-dotenv>=1.0.0
+
+# TTS local: Piper. O áudio é gerado pelo BINÁRIO `piper` (mais estável que a API
+# Python). Instale o piper-tts para ganhar o comando `piper` no PATH:
+piper-tts>=1.2.0

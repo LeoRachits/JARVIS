@@ -7,14 +7,15 @@ import numpy as np
 import sounddevice as sd
 from faster_whisper import WhisperModel
 
+from audio_utils import TARGET_RATE, negotiate_input, resample_to_target, to_mono
+
 logger = logging.getLogger("jarvis.desktop.listener")
 
-_SAMPLE_RATE = 16_000
-_BLOCK_MS = 32
-_BLOCK_SIZE = int(_SAMPLE_RATE * _BLOCK_MS / 1000)   # 512 amostras
-_SILENCE_RMS = 0.003                                   # ~−50dBFS
-_SILENCE_BLOCKS = int(1.2 * 1000 / _BLOCK_MS)         # 1.2s de silêncio pós-fala
-_MIN_TEXT_LEN = 3                                      # transcrições triviais descartadas
+_SAMPLE_RATE    = TARGET_RATE                           # 16 kHz — taxa entregue ao Whisper
+_BLOCK_MS       = 32
+_SILENCE_RMS    = 0.003                                 # ~−50dBFS
+_SILENCE_BLOCKS = int(1.2 * 1000 / _BLOCK_MS)          # 1.2s de silêncio pós-fala
+_MIN_TEXT_LEN   = 3                                     # transcrições triviais descartadas
 
 
 class Listener:
@@ -79,6 +80,11 @@ class Listener:
         pre_speech_sec=N: aguarda até N segundos por início de fala; após fala
                           detectada, sai com 1.2s de silêncio normal.
         """
+        params = negotiate_input(self._device)  # block_ms=32 default
+        if params is None:
+            return None
+        native_rate, channels, block_size = params
+
         max_blocks = int(max_duration_sec * 1000 / _BLOCK_MS)
         pre_blocks = int(pre_speech_sec * 1000 / _BLOCK_MS) if pre_speech_sec else None
         chunks: list[np.ndarray] = []
@@ -87,15 +93,16 @@ class Listener:
 
         try:
             with sd.InputStream(
-                samplerate=_SAMPLE_RATE,
-                channels=1,
+                samplerate=native_rate,
+                channels=channels,
                 dtype="float32",
-                blocksize=_BLOCK_SIZE,
+                blocksize=block_size,
                 device=self._device,
             ) as stream:
                 for _ in range(max_blocks):
-                    block, _ = stream.read(_BLOCK_SIZE)
+                    block, _ = stream.read(block_size)
                     chunks.append(block.copy())
+                    # np.mean() sobre todos os elementos funciona para qualquer shape
                     rms = float(np.sqrt(np.mean(block ** 2)))
 
                     if rms >= _SILENCE_RMS:
@@ -119,4 +126,8 @@ class Listener:
 
         if not chunks:
             return None
-        return np.concatenate(chunks, axis=0).flatten()
+
+        # Grava na taxa nativa; resample para 16 kHz mono antes de passar ao Whisper.
+        all_audio = np.concatenate(chunks, axis=0)
+        mono = to_mono(all_audio)
+        return resample_to_target(mono, native_rate)
