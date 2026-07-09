@@ -1,11 +1,11 @@
 """Orquestrador do cliente de voz Jarvis Desktop.
 
 Máquina de estados:
-  idle ──(palma dupla)──► listening ──(transcrição)──► thinking ──► speaking ──► idle
-                                    └─(silêncio)──► idle               ▲
-                                                                (barge-in)──► listening
+  idle ──(wake word 'jarvis')──► listening ──(texto)──► thinking/speaking ──► followup
+                                           └─(silêncio)──► idle             │
+                                                            (barge-in wake)──┘► listening
+                                                            (silêncio 8s)──────► idle
 """
-# ── Mythus Solutions ── Jarvis Desktop ── jarvis-desktop/main.py ─────────────
 from __future__ import annotations
 
 import logging
@@ -17,15 +17,14 @@ from pathlib import Path
 import numpy as np
 import sounddevice as sd
 
-# Garante que imports locais funcionem independentemente do cwd
 sys.path.insert(0, str(Path(__file__).parent))
 
-from brain_client import BrainClient, BrainConnectionError  # noqa: E402
-from clap_detector import ClapDetector                       # noqa: E402
-from config import load_config                               # noqa: E402
-from hud_bridge import HudBridge                             # noqa: E402
-from listener import Listener                                # noqa: E402
-from speaker import Speaker                                  # noqa: E402
+from brain_client import BrainClient, BrainConnectionError
+from config import load_config
+from hud_bridge import HudBridge
+from listener import Listener
+from speaker import Speaker
+from wake_word import WakeWordDetector
 
 logger = logging.getLogger("jarvis.desktop.main")
 
@@ -53,7 +52,7 @@ class JarvisDesktop:
         self._cfg = load_config()
         self._state = "idle"
 
-        self._hud = HudBridge(port=self._cfg.ws_port)
+        self._hud = HudBridge(port=self._cfg.hud_port)
         self._brain = BrainClient(self._cfg.brain_url, self._cfg.brain_token)
         self._listener = Listener(device=self._cfg.audio_device)
         self._speaker = Speaker(
@@ -61,25 +60,22 @@ class JarvisDesktop:
             brain_token=self._cfg.brain_token,
             on_level=lambda lvl: self._hud.broadcast({"type": "level", "value": lvl}),
         )
-        self._clap_event = threading.Event()
-        self._clap_detector = ClapDetector(
-            sensitivity=self._cfg.clap_sensitivity,
+        self._wake_event = threading.Event()
+        self._wake_detector = WakeWordDetector(
+            model_path=self._cfg.wake_model_path,
             device=self._cfg.audio_device,
-            on_double_clap=self._on_double_clap,
+            on_wake=self._on_wake,
         )
 
-    # ------------------------------------------------------------------ #
-    # Loop principal
-    # ------------------------------------------------------------------ #
     def run(self) -> None:
         self._hud.start()
-        self._clap_detector.start()
+        self._wake_detector.start()
         self._set_state("idle")
         logger.info(
-            "Jarvis Desktop pronto. Aguardando palma dupla "
-            "(sensitivity=%.1f, brain=%s).",
-            self._cfg.clap_sensitivity,
+            "Jarvis Desktop pronto. Diga 'Jarvis' para ativar "
+            "(brain=%s, followup=%gs).",
             self._cfg.brain_url,
+            self._cfg.followup_window_sec,
         )
 
         while True:
@@ -88,7 +84,8 @@ class JarvisDesktop:
                     self._await_activation()
                 elif self._state == "listening":
                     self._handle_listening()
-                # thinking/speaking são sub-estados gerenciados por _handle_thinking
+                elif self._state == "followup":
+                    self._handle_followup()
             except KeyboardInterrupt:
                 logger.info("Encerrando por interrupção do teclado.")
                 break
@@ -97,41 +94,53 @@ class JarvisDesktop:
                 self._speaker.interrupt()
                 self._set_state("idle")
 
-    # ------------------------------------------------------------------ #
-    # Handlers de estado
-    # ------------------------------------------------------------------ #
     def _await_activation(self) -> None:
-        """Bloqueia até palma dupla, toca chime e transiciona para listening."""
-        self._clap_event.wait()
-        self._clap_event.clear()
+        """Bloqueia até wake word 'jarvis', toca chime, vai para listening."""
+        self._wake_event.wait()
+        self._wake_event.clear()
         self._play_chime()
         self._set_state("listening")
 
     def _handle_listening(self) -> None:
-        """Grava + transcreve. Silêncio → idle. Texto → thinking/speaking → idle."""
-        text = self._listener.listen_and_transcribe()
+        """Pausa detector, grava + transcreve, retoma detector."""
+        self._wake_detector.pause()
+        try:
+            text = self._listener.listen_and_transcribe()
+        finally:
+            self._wake_detector.resume()
+
         if not text:
             self._set_state("idle")
             return
 
         self._hud.broadcast({"type": "transcript", "text": text})
+        self._run_thinking(text)
 
+    def _handle_followup(self) -> None:
+        """Escuta por até FOLLOWUP_WINDOW_SEC sem exigir nova wake word."""
+        logger.info(
+            "Escuta de acompanhamento (até %gs)...", self._cfg.followup_window_sec
+        )
+        self._wake_detector.pause()
         try:
-            self._handle_thinking(text)
-        except BrainConnectionError:
-            logger.error("Sem conexão com o cérebro")
-            self._speaker.speak_text(
-                "Estou sem conexão com meu cérebro agora. Tente em instantes."
+            text = self._listener.listen_and_transcribe(
+                pre_speech_sec=self._cfg.followup_window_sec
             )
-            self._set_state("idle")
-        except Exception:
-            logger.exception("Erro durante thinking/speaking")
-            self._set_state("idle")
+        finally:
+            self._wake_detector.resume()
 
-    def _handle_thinking(self, text: str) -> None:
-        """Consome stream do cérebro, fala a resposta e detecta barge-in."""
+        if not text:
+            logger.info("Silêncio no follow-up — voltando a idle.")
+            self._set_state("idle")
+            return
+
+        self._hud.broadcast({"type": "transcript", "text": text})
+        self._run_thinking(text)
+
+    def _run_thinking(self, text: str) -> None:
+        """Consome stream do cérebro, fala a resposta, detecta barge-in por wake word."""
         self._set_state("thinking")
-        self._clap_event.clear()
+        self._wake_event.clear()
         first_delta = [True]
 
         def delta_gen():
@@ -140,9 +149,7 @@ class JarvisDesktop:
                 ev_type = ev.get("type")
                 if ev_type == "delta":
                     if first_delta[0]:
-                        # Primeiro texto chegou: transiciona para speaking
                         self._set_state("speaking")
-                        self._clap_detector.set_barge_in_mode(True)
                         first_delta[0] = False
                     yield ev["text"]
                 elif ev_type == "error":
@@ -153,29 +160,35 @@ class JarvisDesktop:
 
         try:
             self._speaker.speak_stream(delta_gen())
-        finally:
-            self._clap_detector.set_barge_in_mode(False)
+        except BrainConnectionError:
+            logger.error("Sem conexão com o cérebro")
+            self._speaker.speak_text(
+                "Estou sem conexão com meu cérebro agora. Tente em instantes."
+            )
+            self._set_state("idle")
+            return
+        except Exception:
+            logger.exception("Erro durante thinking/speaking")
+            self._set_state("idle")
+            return
 
-        # Barge-in: clap_event foi setado por _on_double_clap durante speaking
-        if self._clap_event.is_set():
-            self._clap_event.clear()
-            logger.info("Barge-in: voltando a ouvir")
+        if self._wake_event.is_set():
+            # Barge-in por wake word detectada durante speaking
+            self._wake_event.clear()
+            logger.info("Barge-in por wake word — voltando a listening")
             self._set_state("listening")
         else:
-            self._set_state("idle")
+            self._set_state("followup")
 
-    # ------------------------------------------------------------------ #
-    # Callbacks e utilitários
-    # ------------------------------------------------------------------ #
-    def _on_double_clap(self) -> None:
-        """Chamado pela thread do ClapDetector — não pode bloquear."""
+    def _on_wake(self) -> None:
+        """Callback da thread do WakeWordDetector — não pode bloquear."""
         if self._state == "speaking":
-            logger.info("Barge-in detectado: interrompendo fala")
+            logger.info("Barge-in detectado por wake word: interrompendo fala")
             self._speaker.interrupt()
-            self._clap_event.set()
+            self._wake_event.set()
         elif self._state == "idle":
-            self._clap_event.set()
-        # Em listening/thinking: ignorar para não interromper transcrição em andamento
+            self._wake_event.set()
+        # listening / thinking / followup: ignorar
 
     def _set_state(self, state: str) -> None:
         self._state = state

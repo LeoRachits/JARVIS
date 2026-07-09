@@ -1,5 +1,4 @@
 """Fala a resposta do Jarvis em streaming de frases via TTS HTTP."""
-# ── Mythus Solutions ── Jarvis Desktop ── jarvis-desktop/speaker.py ──────────
 from __future__ import annotations
 
 import logging

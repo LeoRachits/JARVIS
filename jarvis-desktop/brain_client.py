@@ -1,5 +1,4 @@
 """Consome o endpoint /chat/stream do cérebro via SSE com retry e backoff."""
-# ── Mythus Solutions ── Jarvis Desktop ── jarvis-desktop/brain_client.py ─────
 from __future__ import annotations
 
 import json

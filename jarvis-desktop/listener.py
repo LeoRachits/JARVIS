@@ -1,5 +1,4 @@
 """Gravação do microfone e transcrição com faster-whisper (small, int8, PT-BR)."""
-# ── Mythus Solutions ── Jarvis Desktop ── jarvis-desktop/listener.py ─────────
 from __future__ import annotations
 
 import logging
@@ -14,13 +13,12 @@ _SAMPLE_RATE = 16_000
 _BLOCK_MS = 32
 _BLOCK_SIZE = int(_SAMPLE_RATE * _BLOCK_MS / 1000)   # 512 amostras
 _SILENCE_RMS = 0.003                                   # ~−50dBFS
-_SILENCE_BLOCKS = int(1.2 * 1000 / _BLOCK_MS)         # 1.2s de silêncio = encerra
-_MAX_BLOCKS = int(15 * 1000 / _BLOCK_MS)               # 15s máximo
+_SILENCE_BLOCKS = int(1.2 * 1000 / _BLOCK_MS)         # 1.2s de silêncio pós-fala
 _MIN_TEXT_LEN = 3                                      # transcrições triviais descartadas
 
 
 class Listener:
-    """Grava do microfone até silêncio ou 15s e transcreve em PT com Whisper."""
+    """Grava do microfone e transcreve em PT com Whisper small."""
 
     def __init__(self, device: int | None = None) -> None:
         self._device = device
@@ -30,10 +28,18 @@ class Listener:
         self._model = WhisperModel("small", device="cpu", compute_type="int8")
         logger.info("Whisper pronto.")
 
-    def listen_and_transcribe(self) -> str | None:
-        """Grava até silêncio ou 15s, transcreve em PT-BR. Retorna texto ou None."""
+    def listen_and_transcribe(
+        self,
+        max_duration_sec: float = 15.0,
+        pre_speech_sec: float | None = None,
+    ) -> str | None:
+        """Grava até silêncio pós-fala ou max_duration_sec, transcreve em PT-BR.
+
+        pre_speech_sec: se fornecido, aguarda até este tempo por início de fala
+                        antes de desistir; None = sai após 1.2s de silêncio padrão.
+        """
         logger.info("Ouvindo...")
-        audio = self._record()
+        audio = self._record(max_duration_sec, pre_speech_sec)
         if audio is None or len(audio) < _SAMPLE_RATE // 2:
             logger.info("Nenhum áudio significativo capturado.")
             return None
@@ -46,6 +52,8 @@ class Listener:
                 language="pt",
                 beam_size=5,
                 vad_filter=True,
+                no_speech_threshold=0.3,
+                condition_on_previous_text=False,
             )
             text = " ".join(s.text for s in segments).strip()
         except Exception:
@@ -59,10 +67,23 @@ class Listener:
         logger.info("Transcrito: %r", text)
         return text
 
-    def _record(self) -> np.ndarray | None:
-        """Grava blocos de 32ms com VAD simples até silêncio ou 15s."""
+    def _record(
+        self,
+        max_duration_sec: float = 15.0,
+        pre_speech_sec: float | None = None,
+    ) -> np.ndarray | None:
+        """Grava blocos de 32ms com VAD simples.
+
+        pre_speech_sec=None (padrão): sai após _SILENCE_BLOCKS blocos silenciosos,
+                                      mesmo antes de a fala começar.
+        pre_speech_sec=N: aguarda até N segundos por início de fala; após fala
+                          detectada, sai com 1.2s de silêncio normal.
+        """
+        max_blocks = int(max_duration_sec * 1000 / _BLOCK_MS)
+        pre_blocks = int(pre_speech_sec * 1000 / _BLOCK_MS) if pre_speech_sec else None
         chunks: list[np.ndarray] = []
         silent_count = 0
+        speech_detected = False
 
         try:
             with sd.InputStream(
@@ -72,15 +93,25 @@ class Listener:
                 blocksize=_BLOCK_SIZE,
                 device=self._device,
             ) as stream:
-                for _ in range(_MAX_BLOCKS):
+                for _ in range(max_blocks):
                     block, _ = stream.read(_BLOCK_SIZE)
                     chunks.append(block.copy())
                     rms = float(np.sqrt(np.mean(block ** 2)))
-                    if rms < _SILENCE_RMS:
-                        silent_count += 1
-                    else:
+
+                    if rms >= _SILENCE_RMS:
                         silent_count = 0
-                    if silent_count >= _SILENCE_BLOCKS:
+                        speech_detected = True
+                    else:
+                        silent_count += 1
+
+                    threshold = (
+                        pre_blocks
+                        if (not speech_detected and pre_blocks is not None)
+                        else _SILENCE_BLOCKS
+                    )
+                    if silent_count >= threshold:
+                        if not speech_detected and pre_blocks is not None:
+                            return None  # timeout antes da fala começar
                         break
         except Exception:
             logger.exception("Erro durante gravação do microfone")

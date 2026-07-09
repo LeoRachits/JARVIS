@@ -36,3 +36,7 @@ __pycache__/
 *.pyc
 .idea/
 .vscode/
+.venv/
+
+# Modelos de ML / assets grandes
+jarvis-desktop/models/

@@ -1,5 +1,4 @@
 """Detecção de palma dupla por DSP — limiar adaptativo de RMS + janela de tempo."""
-# ── Mythus Solutions ── Jarvis Desktop ── jarvis-desktop/clap_detector.py ────
 from __future__ import annotations
 
 import logging

@@ -1,7 +1,7 @@
 # Jarvis Desktop — Cliente de Voz
 
-Cliente de voz local que ativa por **palma dupla**, ouve, pensa (via `/chat/stream`)
-e fala a resposta em streaming de frases.
+Cliente de voz local que ativa por **wake word "Jarvis"** (offline, via Vosk), ouve,
+pensa (via `/chat/stream`) e fala a resposta em streaming de frases.
 
 ## Hardware alvo
 
@@ -13,6 +13,7 @@ Whisper roda em CPU com `compute_type="int8"` — boot ~5s, resposta ~1-2s por f
 - Python 3.11+
 - O servidor do cérebro rodando (`jarvis/server.py` na raiz do repo)
 - Microfone e saída de áudio configurados no Windows
+- Modelo Vosk PT-BR (veja abaixo)
 
 ## Instalação
 
@@ -23,6 +24,24 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+### Download do modelo Vosk (obrigatório)
+
+1. Acesse https://alphacephei.com/vosk/models
+2. Baixe **vosk-model-small-pt-0.3** (≈ 31 MB)
+3. Descompacte dentro de `jarvis-desktop/`:
+
+```
+jarvis-desktop/
+└── models/
+    └── vosk-model-small-pt-0.3/
+        ├── am/
+        ├── conf/
+        ├── graph/
+        └── ...
+```
+
+> Caminho configurável via `WAKE_MODEL_PATH` no `voice.env`.
+
 ## Configuração
 
 ```bat
@@ -30,12 +49,17 @@ copy voice.env.example voice.env
 ```
 
 Edite `voice.env`:
-- `BRAIN_URL` — URL do servidor (padrão: `http://127.0.0.1:8787`)
-- `BRAIN_TOKEN` — token Bearer se `JARVIS_API_TOKEN` estiver definido no `.env` do cérebro
-- `CLAP_SENSITIVITY` — aumente se disparar com ruído ambiental (default: 8.0)
-- `AUDIO_DEVICE` — índice do microfone (vazio = padrão do sistema)
 
-Para listar os dispositivos de áudio disponíveis:
+| Variável | Descrição | Padrão |
+|---|---|---|
+| `BRAIN_URL` | URL do servidor do cérebro | `http://127.0.0.1:8787` |
+| `BRAIN_TOKEN` | Token Bearer (vazio se sem auth) | |
+| `WAKE_MODEL_PATH` | Caminho do modelo Vosk | `models/vosk-model-small-pt-0.3` |
+| `FOLLOWUP_WINDOW_SEC` | Segundos de espera por pergunta de acompanhamento | `8` |
+| `AUDIO_DEVICE` | Índice do microfone (vazio = padrão) | |
+| `HUD_PORT` | Porta WebSocket para o HUD | `8765` |
+
+Para listar dispositivos de áudio:
 
 ```bat
 python -c "import sounddevice; print(sounddevice.query_devices())"
@@ -64,24 +88,26 @@ pythonw.exe main.py
 
 ## Uso
 
-| Ação | Comando |
+| Ação | Como fazer |
 |---|---|
-| Ativar | Duas palmas (200–900ms de intervalo) |
-| Interromper fala (barge-in) | Duas palmas durante a resposta |
+| Ativar | Diga **"Jarvis"** |
+| Fazer pergunta de acompanhamento | Fale dentro de 8s após a resposta (sem dizer "Jarvis" de novo) |
+| Interromper fala (barge-in) | Diga **"Jarvis"** durante a resposta |
 | HUD (SPEC-03) | Conectar em `ws://127.0.0.1:8765` |
 
 ## Máquina de estados
 
 ```
-idle ──(palma dupla)──► listening ──(transcrição)──► thinking ──► speaking ──► idle
-                                  └─(silêncio)──► idle                ▲
-                                                           (barge-in)──► listening
+idle ──(wake word)──► listening ──(texto)──► thinking ──► speaking ──► followup
+                                └─(silêncio)──► idle                  │   │
+                                                       (barge-in)──►  │   └─(fala)──► thinking
+                                                                       └─(silêncio 8s)──► idle
 ```
 
 ## Testes rápidos
 
 ```bat
-# Testa lógica do detector de palma (sem hardware):
+# Testa lógica do detector de palma (sem hardware — legado, mantido por referência):
 python clap_detector.py
 
 # Testa conexão com o cérebro (servidor deve estar rodando):
@@ -92,7 +118,7 @@ for ev in BrainClient('http://127.0.0.1:8787').stream_chat('qual a capital da Fr
 "
 
 # Verifica sintaxe de todos os módulos:
-python -m py_compile config.py hud_bridge.py brain_client.py clap_detector.py listener.py speaker.py main.py
+python -m py_compile config.py hud_bridge.py brain_client.py clap_detector.py listener.py speaker.py wake_word.py main.py
 ```
 
 ## Estrutura
@@ -100,7 +126,8 @@ python -m py_compile config.py hud_bridge.py brain_client.py clap_detector.py li
 ```
 jarvis-desktop/
 ├── main.py           — orquestrador (máquina de estados)
-├── clap_detector.py  — detecção de palma dupla por DSP
+├── wake_word.py      — detecção de wake word offline (Vosk)
+├── clap_detector.py  — detecção de palma dupla por DSP (referência)
 ├── listener.py       — gravação + transcrição (Whisper small int8)
 ├── speaker.py        — TTS em streaming de frases
 ├── hud_bridge.py     — servidor WebSocket para o HUD
@@ -108,5 +135,6 @@ jarvis-desktop/
 ├── config.py         — lê voice.env
 ├── requirements.txt
 ├── voice.env.example
+├── models/           — modelo(s) Vosk (não versionado)
 └── logs/             — criado automaticamente
 ```

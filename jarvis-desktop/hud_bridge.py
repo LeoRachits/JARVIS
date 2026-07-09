@@ -1,5 +1,4 @@
 """Servidor WebSocket local que publica eventos de estado para o HUD (SPEC-03)."""
-# ── Mythus Solutions ── Jarvis Desktop ── jarvis-desktop/hud_bridge.py ───────
 from __future__ import annotations
 
 import asyncio
@@ -58,9 +57,20 @@ class HudBridge:
             logger.exception("Erro fatal no loop do HudBridge")
 
     async def _serve(self, ready: threading.Event) -> None:
-        async with websockets.serve(self._handler, "127.0.0.1", self._port):
-            ready.set()
-            await asyncio.Future()  # roda para sempre
+        try:
+            async with websockets.serve(self._handler, "127.0.0.1", self._port):
+                ready.set()
+                await asyncio.Future()  # roda para sempre
+        except OSError as exc:
+            if exc.errno in (10048, 98):  # EADDRINUSE (Windows / Linux)
+                logger.warning(
+                    "Porta %d já em uso — HUD não vai conectar; "
+                    "feche instâncias anteriores do Jarvis ou mude HUD_PORT no voice.env.",
+                    self._port,
+                )
+                ready.set()  # não bloqueia start() mesmo sem servidor WS
+            else:
+                raise
 
     async def _handler(self, websocket) -> None:
         self._clients.add(websocket)
