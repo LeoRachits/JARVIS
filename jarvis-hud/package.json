@@ -1,0 +1,12 @@
+{
+  "name": "jarvis-hud",
+  "version": "1.0.0",
+  "description": "HUD visual do Jarvis — orb ciano estilo reator arc",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "dependencies": {
+    "electron": "^33.0.0"
+  }
+}

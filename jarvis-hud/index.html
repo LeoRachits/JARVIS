@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Jarvis HUD</title>
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    background: transparent !important;
+    overflow: hidden;
+  }
+  canvas {
+    position: absolute;
+    top: 0; left: 0;
+    background: transparent;
+  }
+  #legenda {
+    position: absolute;
+    bottom: 16px;
+    left: 14px;
+    right: 14px;
+    max-height: 108px;
+    overflow: hidden;
+    color: rgba(51, 214, 255, 0.92);
+    font: 11px/1.45 'Courier New', monospace;
+    text-shadow: 0 0 10px rgba(51, 214, 255, 0.65);
+    transition: opacity 1.8s ease;
+    pointer-events: none;
+    user-select: none;
+  }
+  #legenda .usuario { color: rgba(180, 240, 255, 0.70); margin-bottom: 3px; }
+  #legenda .jarvis  { color: rgba(51, 214, 255, 0.95); }
+</style>
+</head>
+<body>
+<canvas id="orb"></canvas>
+<div id="legenda"></div>
+
+<script>
+// ── Porta WS ──────────────────────────────────────────────────────────────────
+const WS_PORT = new URLSearchParams(window.location.search).get('port') || '8765';
+
+// ── Canvas ────────────────────────────────────────────────────────────────────
+const canvas = document.getElementById('orb');
+const ctx    = canvas.getContext('2d');
+canvas.width  = window.innerWidth;
+canvas.height = window.innerHeight;
+const W  = canvas.width;
+const H  = canvas.height;
+const CX = W / 2;
+const CY = H * 0.44;   // levemente acima do centro para deixar espaço à legenda
+
+// ── Estado global ─────────────────────────────────────────────────────────────
+let state       = 'idle';
+let levelTarget = 0;
+let levelSmooth = 0;
+let t           = 0;
+let radarAngle  = 0;
+let errorTimer  = null;
+
+// ── Partículas (70 pontos orbitando em elipses inclinadas) ────────────────────
+const PARTS = Array.from({ length: 70 }, () => ({
+    angle: Math.random() * Math.PI * 2,
+    speed: 0.004 + Math.random() * 0.007,
+    axisA: 72  + Math.random() * 58,   // semi-eixo maior da elipse
+    axisB: 42  + Math.random() * 38,   // semi-eixo menor
+    tilt:  (Math.random() - 0.5) * 0.8, // inclinação do plano orbital
+    alpha: Math.random(),
+    aDir:  Math.random() > 0.5 ? 1 : -1,
+    size:  0.7 + Math.random() * 1.9,
+}));
+
+// ── Utilitários ───────────────────────────────────────────────────────────────
+const lerp  = (a, b, f) => a + (b - a) * f;
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+// ── Propriedades visuais por estado ──────────────────────────────────────────
+function getProps() {
+    switch (state) {
+        case 'idle':
+            // Núcleo "respira" devagar — ~0.2Hz (período 5s), partículas lentas.
+            return {
+                r:      45 + Math.sin(t * Math.PI * 0.4) * 6,
+                pSpeed: 0.7,
+                gAlpha: 0.10,
+                rExp:   0,
+                color:  [51, 214, 255],
+            };
+        case 'listening':
+            // Anel expande e oscila, partículas aceleram, brilho mais forte.
+            return {
+                r:      48 + Math.sin(t * Math.PI * 2.0) * 10,
+                pSpeed: 2.5,
+                gAlpha: 0.20,
+                rExp:   14 + Math.sin(t * 2.4) * 8,
+                color:  [51, 214, 255],
+            };
+        case 'thinking':
+            // Partículas giram rápido; arco de varredura desenhado à parte.
+            return {
+                r:      46 + Math.sin(t * Math.PI * 5.0) * 5,
+                pSpeed: 4.5,
+                gAlpha: 0.16,
+                rExp:   8,
+                color:  [51, 214, 255],
+            };
+        case 'speaking':
+            // Núcleo pulsa com o nível de áudio real (levelSmooth), lerp aplicado.
+            return {
+                r:      48 + levelSmooth * 38,
+                pSpeed: 2.0 + levelSmooth * 3.0,
+                gAlpha: 0.14 + levelSmooth * 0.24,
+                rExp:   levelSmooth * 30,
+                color:  [51, 214, 255],
+            };
+        case 'error':
+            // Pulso duplo rápido em vermelho; auto-retorna a idle em 2.5s.
+            return {
+                r:      50 + Math.abs(Math.sin(t * Math.PI * 10)) * 18,
+                pSpeed: 0.4,
+                gAlpha: 0.28,
+                rExp:   0,
+                color:  [255, 60, 60],
+            };
+        default:
+            return { r: 45, pSpeed: 0.7, gAlpha: 0.10, rExp: 0, color: [51, 214, 255] };
+    }
+}
+
+// ── Anéis de brilho concêntricos ──────────────────────────────────────────────
+function drawRings(r, p) {
+    const [R, G, B] = p.color;
+    const rBase = r + p.rExp;
+    [1.90, 1.50, 1.25].forEach((s, i) => {
+        const rr = rBase * s;
+        const a  = p.gAlpha * (1 - i * 0.30);
+        ctx.beginPath();
+        ctx.arc(CX, CY, rr, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(${R},${G},${B},${a})`;
+        ctx.lineWidth   = 1.6 - i * 0.4;
+        ctx.stroke();
+    });
+}
+
+// ── Partículas orbitantes ─────────────────────────────────────────────────────
+function drawParticles(p) {
+    const [R, G, B] = p.color;
+    for (const pt of PARTS) {
+        pt.angle += pt.speed * p.pSpeed;
+        pt.alpha += 0.018 * pt.aDir;
+        if (pt.alpha > 1) pt.aDir = -1;
+        if (pt.alpha < 0) pt.aDir =  1;
+        const cos = Math.cos(pt.tilt);
+        const sin = Math.sin(pt.tilt);
+        const ex  = pt.axisA * Math.cos(pt.angle);
+        const ey  = pt.axisB * Math.sin(pt.angle);
+        ctx.beginPath();
+        ctx.arc(
+            CX + ex * cos - ey * sin,
+            CY + ex * sin + ey * cos,
+            pt.size, 0, Math.PI * 2
+        );
+        ctx.fillStyle = `rgba(${R},${G},${B},${clamp(pt.alpha * 0.85, 0, 1)})`;
+        ctx.fill();
+    }
+}
+
+// ── Arco de varredura tipo radar (thinking) ───────────────────────────────────
+function drawRadar(r) {
+    radarAngle = (radarAngle + 0.05) % (Math.PI * 2);
+    const sweep  = Math.PI * 0.35;
+    const radius = r * 2.4;
+    // Setor translúcido
+    ctx.beginPath();
+    ctx.moveTo(CX, CY);
+    ctx.arc(CX, CY, radius, radarAngle - sweep, radarAngle);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(51,214,255,0.07)';
+    ctx.fill();
+    // Linha de varredura
+    ctx.beginPath();
+    ctx.moveTo(CX, CY);
+    ctx.lineTo(
+        CX + Math.cos(radarAngle) * radius,
+        CY + Math.sin(radarAngle) * radius
+    );
+    ctx.strokeStyle = 'rgba(51,214,255,0.55)';
+    ctx.lineWidth   = 1.5;
+    ctx.stroke();
+}
+
+// ── Núcleo do orb ─────────────────────────────────────────────────────────────
+function drawCore(r, p) {
+    const [R, G, B] = p.color;
+    const rr = Math.max(1, r);
+
+    // Glow externo
+    const grd = ctx.createRadialGradient(CX, CY, rr * 0.2, CX, CY, rr * 2.0);
+    grd.addColorStop(0.0, `rgba(${R},${G},${B},0.38)`);
+    grd.addColorStop(0.5, `rgba(${R},${G},${B},0.10)`);
+    grd.addColorStop(1.0, 'rgba(0,0,0,0)');
+    ctx.beginPath();
+    ctx.arc(CX, CY, rr * 2.0, 0, Math.PI * 2);
+    ctx.fillStyle = grd;
+    ctx.fill();
+
+    // Preenchimento (branco no centro → ciano → azul escuro na borda)
+    const crd = ctx.createRadialGradient(CX, CY - rr * 0.25, rr * 0.08, CX, CY, rr);
+    crd.addColorStop(0.00, '#ffffff');
+    crd.addColorStop(0.25, '#b8f4ff');
+    crd.addColorStop(0.65, `rgb(${R},${G},${B})`);
+    crd.addColorStop(1.00, '#041a28');
+    ctx.beginPath();
+    ctx.arc(CX, CY, rr, 0, Math.PI * 2);
+    ctx.fillStyle = crd;
+    ctx.fill();
+
+    // Borda brilhante
+    ctx.beginPath();
+    ctx.arc(CX, CY, rr, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(${R},${G},${B},0.88)`;
+    ctx.lineWidth   = 1.8;
+    ctx.stroke();
+}
+
+// ── Loop de animação (~60fps) ─────────────────────────────────────────────────
+let lastTS = 0;
+
+function frame(ts) {
+    const dt  = Math.min((ts - lastTS) / 1000, 0.05); // cap em 50ms por frame
+    lastTS    = ts;
+    t        += dt;
+    levelSmooth = lerp(levelSmooth, levelTarget, 0.18); // suavização do nível de áudio
+
+    ctx.clearRect(0, 0, W, H);
+
+    const p = getProps();
+    drawRings(p.r, p);
+    drawParticles(p);
+    if (state === 'thinking') drawRadar(p.r);
+    drawCore(p.r, p);
+
+    requestAnimationFrame(frame);
+}
+
+// Inicializa o timestamp antes do primeiro frame real.
+requestAnimationFrame(ts => { lastTS = ts; requestAnimationFrame(frame); });
+
+// ── Legenda (transcript + deltas) ─────────────────────────────────────────────
+const legenda   = document.getElementById('legenda');
+let legendTimer = null;
+let userText    = '';
+let aiText      = '';
+
+function esc(s) {
+    return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+}
+
+function refreshLegenda() {
+    legenda.style.opacity = '1';
+    legenda.innerHTML =
+        (userText ? `<div class="usuario">&rsaquo; ${esc(userText)}</div>` : '') +
+        (aiText   ? `<div class="jarvis">${esc(aiText)}</div>`             : '');
+    clearTimeout(legendTimer);
+    // Fade-out após 8s sem novos eventos de texto.
+    legendTimer = setTimeout(() => { legenda.style.opacity = '0'; }, 8000);
+}
+
+// ── WebSocket (cliente) ───────────────────────────────────────────────────────
+let ws      = null;
+let wsTimer = null;
+
+function connect() {
+    if (ws && ws.readyState < 2) return; // CONNECTING(0) ou OPEN(1) — não duplica
+    try {
+        ws = new WebSocket(`ws://127.0.0.1:${WS_PORT}`);
+    } catch (_) {
+        scheduleReconnect();
+        return;
+    }
+
+    ws.onopen = () => {
+        clearTimeout(wsTimer);
+        console.log(`[HUD] conectado em ws://127.0.0.1:${WS_PORT}`);
+    };
+
+    ws.onmessage = ({ data }) => {
+        let msg;
+        try { msg = JSON.parse(data); } catch { return; }
+
+        switch (msg.type) {
+            case 'state':
+                if (msg.value === 'error') {
+                    state = 'error';
+                    clearTimeout(errorTimer);
+                    // Pulso de erro por 2.5s; depois volta a idle automaticamente.
+                    errorTimer = setTimeout(() => {
+                        if (state === 'error') state = 'idle';
+                    }, 2500);
+                } else {
+                    state = msg.value || 'idle';
+                }
+                break;
+
+            case 'level':
+                levelTarget = clamp(Number(msg.value) || 0, 0, 1);
+                break;
+
+            case 'transcript':
+                userText = String(msg.text || '');
+                aiText   = '';
+                refreshLegenda();
+                break;
+
+            case 'delta':
+                aiText += String(msg.text || '');
+                // Evita acúmulo ilimitado: mantém os últimos 220 caracteres.
+                if (aiText.length > 220) aiText = '…' + aiText.slice(-220);
+                refreshLegenda();
+                break;
+        }
+    };
+
+    const onClose = () => {
+        console.log('[HUD] WS desconectado — reconectando em 2s...');
+        state       = 'idle';
+        levelTarget = 0;
+        scheduleReconnect();
+    };
+    ws.onclose = onClose;
+    ws.onerror = onClose;
+}
+
+function scheduleReconnect() {
+    clearTimeout(wsTimer);
+    wsTimer = setTimeout(connect, 2000);
+}
+
+connect();
+</script>
+</body>
+</html>
